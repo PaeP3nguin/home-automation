@@ -6,7 +6,8 @@ import logging
 import time
 from collections import namedtuple
 
-from RPi import GPIO
+#from RPi import GPIO
+import pigpio
 
 MAX_CHANGES = 67
 
@@ -48,6 +49,7 @@ class RFDevice:
         self._rx_last_timestamp = 0
         self._rx_change_count = 0
         self._rx_repeat_count = 0
+        self._rx_handler = None
         # successful RX values
         self.rx_code = None
         self.rx_code_timestamp = None
@@ -55,7 +57,8 @@ class RFDevice:
         self.rx_bitlength = None
         self.rx_pulselength = None
 
-        GPIO.setmode(GPIO.BCM)
+        self.pigpio = pigpio.pi()
+
         _LOGGER.debug("Using GPIO " + str(gpio))
 
     def cleanup(self):
@@ -65,7 +68,6 @@ class RFDevice:
         if self.rx_enabled:
             self.disable_rx()
         _LOGGER.debug("Cleanup")
-        GPIO.cleanup()
 
     def enable_tx(self):
         """Enable TX, set up GPIO."""
@@ -74,7 +76,7 @@ class RFDevice:
             return False
         if not self.tx_enabled:
             self.tx_enabled = True
-            GPIO.setup(self.gpio, GPIO.OUT)
+            self.pigpio.set_mode(self.gpio, pigpio.OUTPUT)
             _LOGGER.debug("TX enabled")
         return True
 
@@ -82,7 +84,7 @@ class RFDevice:
         """Disable TX, reset GPIO."""
         if self.tx_enabled:
             # set up GPIO pin as input for safety
-            GPIO.setup(self.gpio, GPIO.IN)
+            self.pigpio.set_mode(self.gpio, pigpio.INPUT)
             self.tx_enabled = False
             _LOGGER.debug("TX disabled")
         return True
@@ -151,9 +153,9 @@ class RFDevice:
         if not self.tx_enabled:
             _LOGGER.error("TX is not enabled, not sending data")
             return False
-        GPIO.output(self.gpio, GPIO.HIGH)
+        self.pigpio.write(self.gpio, 1)
         time.sleep((highpulses * self.tx_pulselength) / 1000000)
-        GPIO.output(self.gpio, GPIO.LOW)
+        self.pigpio.write(self.gpio, 0)
         time.sleep((lowpulses * self.tx_pulselength) / 1000000)
         return True
 
@@ -164,24 +166,24 @@ class RFDevice:
             return False
         if not self.rx_enabled:
             self.rx_enabled = True
-            GPIO.setup(self.gpio, GPIO.IN)
-            GPIO.add_event_detect(self.gpio, GPIO.BOTH)
-            GPIO.add_event_callback(self.gpio, self.rx_callback)
+            def callback(gpio, level, tick):
+                self.rx_callback(tick)
+            self._rx_handler = self.pigpio.callback(self.gpio, pigpio.EITHER_EDGE, callback)
             _LOGGER.debug("RX enabled")
         return True
 
     def disable_rx(self):
         """Disable RX, remove GPIO event detection."""
         if self.rx_enabled:
-            GPIO.remove_event_detect(self.gpio)
+            self._rx_handler.cancel()
+            self._rx_handler = None
             self.rx_enabled = False
             _LOGGER.debug("RX disabled")
         return True
 
     # pylint: disable=unused-argument
-    def rx_callback(self, gpio):
+    def rx_callback(self, timestamp):
         """RX callback for GPIO event detection. Handle basic signal detection."""
-        timestamp = int(time.perf_counter() * 1000000)
         duration = timestamp - self._rx_last_timestamp
 
         if duration > 5000:
