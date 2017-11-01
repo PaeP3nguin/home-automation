@@ -10,16 +10,31 @@ import signal
 import time
 import sys
 
+LIGHT_CODES = {
+    1: {
+        "on": 4543795,
+        "off": 4543804,
+    },
+    2: {
+        "on": 4543939,
+        "off": 4543948,
+    },
+    3: {
+        "on": 4544259,
+        "off": 4544268,
+    },
+    "all": {
+        "on": 4551939,
+        "off": 4551948,
+    },
+}
+
 PIR_PIN = 13
 PRESSURE_PIN = 18
 RF_TX_PIN = 21
 RF_RX_PIN = 20
 LIGHT_PIN = 27
 RF_PULSE_LENGTH = 180
-ON_CODE = 4543795
-OFF_CODE = 4543804
-ALL_ON_CODE = 4551939
-ALL_OFF_CODE = 4551948
 
 RF_TX = RFDevice(RF_TX_PIN)
 RF_TX.enable_tx()
@@ -62,9 +77,11 @@ def monitor_light():
         light = GPIO.input(LIGHT_PIN)
         print(light)
         if not light:
-            RF_TX.tx_code(ON_CODE, tx_pulselength=RF_PULSE_LENGTH)
+            RF_TX.tx_code(LIGHT_CODES[1]["on"],
+                          tx_pulselength=RF_PULSE_LENGTH)
         else:
-            RF_TX.tx_code(OFF_CODE, tx_pulselength=RF_PULSE_LENGTH)
+            RF_TX.tx_code(LIGHT_CODES[1]["off"],
+                          tx_pulselength=RF_PULSE_LENGTH)
 
 
 def monitor_motion():
@@ -73,9 +90,9 @@ def monitor_motion():
     while True:
         GPIO.wait_for_edge(PIR_PIN, GPIO.RISING)
         print("You moved")
-        RF_TX.tx_code(ON_CODE, tx_pulselength=RF_PULSE_LENGTH)
+        RF_TX.tx_code(LIGHT_CODES[1]["on"], tx_pulselength=RF_PULSE_LENGTH)
         GPIO.wait_for_edge(PIR_PIN, GPIO.FALLING)
-        RF_TX.tx_code(OFF_CODE, tx_pulselength=RF_PULSE_LENGTH)
+        RF_TX.tx_code(LIGHT_CODES[1]["off"], tx_pulselength=RF_PULSE_LENGTH)
 
 
 def listen_rf():
@@ -91,12 +108,12 @@ def listen_rf():
 
 def all_lights_on(delay=None):
     """Turn all lights on"""
-    transmit_rf(ALL_ON_CODE, delay)
+    transmit_rf(LIGHT_CODES["all"]["on"], delay)
 
 
 def all_lights_off(delay=None):
     """Turn all lights off"""
-    transmit_rf(ALL_OFF_CODE, delay)
+    transmit_rf(LIGHT_CODES["all"]["off"], delay)
 
 
 def transmit_rf(code, delay=None):
