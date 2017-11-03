@@ -9,46 +9,46 @@
 */
 
 #include "rc-switch/RCSwitch.h"
-#include <stdio.h>
-#include <stdlib.h>
-
-RCSwitch mySwitch;
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
 
 int main(int argc, char *argv[]) {
-	// This pin is not the first pin on the RPi GPIO header!
-	// Consult https://projects.drogon.net/raspberry-pi/wiringpi/pins/
-	// for more information.
-	int PIN = 20;
-
 	if (wiringPiSetupGpio() == -1) {
-		printf("wiringPiSetup failed, exiting...");
+		printf("setup-fail");
 		return 0;
+	} else {
+		printf("setup");
 	}
 
-	int pulseLength = 0;
+	// Using BCM numbering
+	int PIN = 20;
 	if (argv[1] != NULL) {
-		pulseLength = atoi(argv[1]);
+		PIN = atoi(argv[1]);
 	}
 
-	mySwitch = RCSwitch();
-	if (pulseLength != 0) {
-		mySwitch.setPulseLength(pulseLength);
-	}
-	mySwitch.enableReceive(PIN);
+	RCSwitch rfReceiver = RCSwitch();
+	rfReceiver.enableReceive(PIN);
 
-	while (1) {
-		if (mySwitch.available()) {
-			int value = mySwitch.getReceivedValue();
+	int milliseconds = 100;
+	struct timespec ts;
+	ts.tv_sec = 0;
+	ts.tv_nsec = milliseconds * 1000000L;
 
-			if (value == 0) {
-				printf("Unknown encoding\n");
-			} else {
-				printf("Received %i\n", mySwitch.getReceivedValue());
-				printf("Received pulse %i\n", mySwitch.getReceivedDelay());
+	while (true) {
+		if (rfReceiver.available()) {
+			int value = rfReceiver.getReceivedValue();
+
+			if (value != 0) {
+				// code:pulse length, ex. 4551939:180
+				printf("%i:%i\n", value, rfReceiver.getReceivedDelay());
 			}
 
-			mySwitch.resetAvailable();
+			rfReceiver.resetAvailable();
 		}
+
+		// Sleep 100ms so we just check 10x a second instead of as fast as possible
+		nanosleep(&ts, NULL);
 	}
 
 	exit(0);
