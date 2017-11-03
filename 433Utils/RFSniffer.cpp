@@ -8,7 +8,7 @@
   by @justy to provide a handy RF code sniffer
 */
 
-#include "../rc-switch/RCSwitch.h"
+#include "rc-switch/RCSwitch.h"
 #include <stdio.h>
 #include <stdlib.h>
 
