@@ -14,11 +14,13 @@
 #include <ctime>
 
 int main(int argc, char *argv[]) {
+	// Disabling buffering makes it easier to read output in our python script
+	setbuf(stdout, NULL);
 	if (wiringPiSetupGpio() == -1) {
-		printf("setup-fail");
+		printf("setup-fail\n");
 		return 0;
 	} else {
-		printf("setup");
+		printf("setup\n");
 	}
 
 	// Using BCM numbering
