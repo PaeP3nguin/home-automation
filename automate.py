@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 
 from rpi_rf import RFDevice
-from multiprocessing import Process
+from multiprocessing import Process, Value
 
 import Adafruit_GPIO.SPI as SPI
 import Adafruit_MCP3008
+import logging.handlers
 import RPi.GPIO as GPIO
+import subprocess
+import argparse
+import datetime
+import logging
 import signal
 import time
 import sys
@@ -29,95 +34,176 @@ LIGHT_CODES = {
     },
 }
 
-PIR_PIN = 13
-PRESSURE_PIN = 18
+PIR_PIN = 26
 RF_TX_PIN = 21
 RF_RX_PIN = 20
-LIGHT_PIN = 27
+LIGHT_PIN = 19
 RF_PULSE_LENGTH = 180
 
 RF_TX = RFDevice(RF_TX_PIN)
 RF_TX.enable_tx()
 
-RF_RX = RFDevice(RF_RX_PIN)
-# RF_RX.enable_rx()
-
 SPI_PORT = 0
 SPI_DEVICE = 0
 
+IS_DARK = Value('i', 0)
+ARE_LIGHTS_ON = Value('i', 0)
+
+RF_RX_PROC = subprocess.Popen(['./433Utils/RFSniffer'],
+                              stdout=subprocess.PIPE,
+                              universal_newlines=True)
+
+LOGGER = logging.getLogger(__name__)
+
 
 def main():
-    # listen_rf_proc = Process(target=listen_rf)
-    motion_process = Process(target=monitor_pressure)
-    # pressure_process = Process(target=monitor_pressure)
+    GPIO.setwarnings(False)
+    GPIO.setmode(GPIO.BCM)
 
-    # listen_rf_proc.start()
+    signal.signal(signal.SIGINT, exithandler)
+
+    parser = argparse.ArgumentParser(description='Automate lights.')
+    parser.add_argument('--log_to_file', help="log output to a file",
+                        action="store_true")
+    try:
+        args = parser.parse_args()
+    except SystemExit:
+        cleanup()
+        sys.exit()
+
+    setup_logger(args.log_to_file)
+    start_processes()
+
+
+def setup_logger(log_to_file=False):
+    formatter = logging.Formatter(
+        '%(asctime)s : %(name)-10s : %(levelname)-7s : %(message)s')
+
+    LOGGER.setLevel(logging.DEBUG)
+    if log_to_file:
+        file_handler = logging.handlers.RotatingFileHandler(
+            'automate.log', maxBytes=10000, backupCount=1)
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(formatter)
+        LOGGER.addHandler(file_handler)
+    else:
+        print_handler = logging.StreamHandler(sys.stdout)
+        print_handler.setLevel(logging.DEBUG)
+        print_handler.setFormatter(formatter)
+        LOGGER.addHandler(print_handler)
+
+    LOGGER.debug("Starting main")
+
+
+def start_processes():
+    listen_rf_proc = Process(target=listen_rf, args=(ARE_LIGHTS_ON,))
+    listen_rf_proc.daemon = True
+    listen_rf_proc.start()
+
+    motion_process = Process(target=monitor_motion, args=(IS_DARK,))
+    motion_process.daemon = True
     motion_process.start()
-    # pressure_process.start()
 
-    # listen_rf_proc.join()
-    motion_process.join()
-    # pressure_process.join()
+    pressure_process = Process(target=monitor_pressure, args=(IS_DARK,))
+    pressure_process.daemon = True
+    pressure_process.start()
+
+    # light_process = Process(target=monitor_light, args=(IS_DARK,))
+    # light_process.daemon = True
+    # light_process.start()
+
+    # Stop running at 9PM
+    # Script is expected to be started by cron
+    # kill_at(datetime.time(hour=21), True)
+    kill_at(datetime.time(hour=21))
 
 
-def monitor_pressure():
+def kill_at(end_time, testing=False):
+    LOGGER.debug("Kill timer started")
+    while True:
+        if datetime.datetime.now().time() > end_time and not testing:
+            LOGGER.debug("Killing")
+            cleanup()
+            sys.exit()
+        time.sleep(60)
+
+
+def listen_rf(lights_on):
+    LOGGER.info("Started listening")
+    LOGGER.debug("RFSniffer " + RF_RX_PROC.stdout.readline().strip())
+    for line in iter(RF_RX_PROC.stdout.readline, ''):
+        code, length = [int(n) for n in line.split(':')]
+        LOGGER.debug("Code: %d, len: %d", code, length)
+        if code == LIGHT_CODES["all"]["on"]:
+            LOGGER.info("Detected lights on")
+            lights_on.value = 1
+        elif code == LIGHT_CODES["all"]["off"]:
+            LOGGER.info("Detected lights off")
+            lights_on.value = 0
+
+
+def monitor_pressure(is_dark):
+    def median(in_list):
+        l = len(in_list)
+        if l == 0:
+            return 0
+        return sorted(in_list)[l // 2]
+
     mcp = Adafruit_MCP3008.MCP3008(spi=SPI.SpiDev(SPI_PORT, SPI_DEVICE))
+    last_values = []
+    last_median = 0
     while True:
         value = mcp.read_adc(6)
-        if value >= 20:
-            print("Lazy bum")
+        curr_median = median(last_values)
+        if curr_median >= 30 and last_median < 30 and not is_dark.value:
+            LOGGER.info("Lazy bum")
             all_lights_off(15)
-        else:
-            time.sleep(0.25)
+        last_values.append(value)
+        if len(last_values) > 5:
+            last_values.pop(0)
+        last_median = curr_median
+        time.sleep(0.25)
 
 
-def monitor_light():
+def monitor_light(is_dark):
     GPIO.setup(LIGHT_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+    is_dark.value = GPIO.input(LIGHT_PIN)
     while True:
-        light = GPIO.input(LIGHT_PIN)
-        print(light)
-        if not light:
-            RF_TX.tx_code(LIGHT_CODES[1]["on"],
-                          tx_pulselength=RF_PULSE_LENGTH)
-        else:
-            RF_TX.tx_code(LIGHT_CODES[1]["off"],
-                          tx_pulselength=RF_PULSE_LENGTH)
+        GPIO.wait_for_edge(LIGHT_PIN, GPIO.BOTH)
+        is_dark.value = GPIO.input(LIGHT_PIN)
+        print(is_dark.value)
 
 
-def monitor_motion():
+def monitor_motion(is_dark):
     GPIO.setup(PIR_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 
     while True:
         GPIO.wait_for_edge(PIR_PIN, GPIO.RISING)
-        print("You moved")
-        RF_TX.tx_code(LIGHT_CODES[1]["on"], tx_pulselength=RF_PULSE_LENGTH)
-        GPIO.wait_for_edge(PIR_PIN, GPIO.FALLING)
-        RF_TX.tx_code(LIGHT_CODES[1]["off"], tx_pulselength=RF_PULSE_LENGTH)
-
-
-def listen_rf():
-    last_rf = None
-
-    while True:
-        if RF_RX.rx_code_timestamp != last_rf:
-            last_rf = RF_RX.rx_code_timestamp
-            print("code: {}, pulselength: {}, protocol: {}".format(
-                str(RF_RX.rx_code), str(RF_RX.rx_pulselength), str(RF_RX.rx_proto)))
-        time.sleep(0.25)
+        LOGGER.debug("You moved, dark: " + str(is_dark.value))
+        # if is_dark.value:
+        all_lights_on()
 
 
 def all_lights_on(delay=None):
     """Turn all lights on"""
+    LOGGER.info("Turning lights on")
+    if ARE_LIGHTS_ON.value:
+        LOGGER.warning("Cancelled as lights already on")
+        return
     transmit_rf(LIGHT_CODES["all"]["on"], delay)
 
 
 def all_lights_off(delay=None):
     """Turn all lights off"""
+    LOGGER.info("Turning lights off")
+    if not ARE_LIGHTS_ON.value:
+        LOGGER.warning("Cancelled as lights already off")
+        return
     transmit_rf(LIGHT_CODES["all"]["off"], delay)
 
 
 def transmit_rf(code, delay=None):
-    """Transmit an RF code"""
+    """Transmit an RF code. Tries 3 times for reliability"""
     if delay:
         time.sleep(delay)
     RF_TX.tx_code(code, tx_pulselength=RF_PULSE_LENGTH)
@@ -128,16 +214,16 @@ def transmit_rf(code, delay=None):
 
 
 def exithandler(signal, frame):
-    # These also call GPIO.cleanup()
+    cleanup()
+
+
+def cleanup():
+    LOGGER.info("Cleaning up")
+    # This also calls GPIO.cleanup()
     RF_TX.cleanup()
-    RF_RX.cleanup()
-    sys.exit(0)
+    RF_RX_PROC.kill()
+    sys.exit()
 
 
 if __name__ == '__main__':
-    GPIO.setwarnings(False)
-    GPIO.setmode(GPIO.BCM)
-
-    signal.signal(signal.SIGINT, exithandler)
-
     main()
