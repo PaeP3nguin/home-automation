@@ -65,6 +65,8 @@ def main():
     parser = argparse.ArgumentParser(description='Automate lights.')
     parser.add_argument('--log_to_file', help="log output to a file",
                         action="store_true")
+    parser.add_argument('-t', '--testing', help="testing mode on",
+                        action="store_true")
     try:
         args = parser.parse_args()
     except SystemExit:
@@ -72,7 +74,7 @@ def main():
         sys.exit()
 
     setup_logger(args.log_to_file)
-    start_processes()
+    start_processes(args.testing)
 
 
 def setup_logger(log_to_file=False):
@@ -95,7 +97,7 @@ def setup_logger(log_to_file=False):
     LOGGER.debug("Starting main")
 
 
-def start_processes():
+def start_processes(testing=False):
     listen_rf_proc = Process(target=listen_rf, args=(ARE_LIGHTS_ON,))
     listen_rf_proc.daemon = True
     listen_rf_proc.start()
@@ -114,8 +116,7 @@ def start_processes():
 
     # Stop running at 9PM
     # Script is expected to be started by cron
-    # kill_at(datetime.time(hour=21), True)
-    kill_at(datetime.time(hour=21))
+    kill_at(datetime.time(hour=21), testing)
 
 
 def kill_at(end_time, testing=False):
