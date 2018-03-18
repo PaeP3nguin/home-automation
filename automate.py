@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from rpi_rf import RFDevice
+from datetime import datetime, timedelta
 from multiprocessing import Process, Value
 
 import Adafruit_GPIO.SPI as SPI
@@ -9,7 +10,6 @@ import logging.handlers
 import RPi.GPIO as GPIO
 import subprocess
 import argparse
-import datetime
 import logging
 import signal
 import time
@@ -77,26 +77,6 @@ def main():
     start_processes(args.testing)
 
 
-def setup_logger(log_to_file=False):
-    formatter = logging.Formatter(
-        '%(asctime)s : %(name)-10s : %(levelname)-7s : %(message)s')
-
-    LOGGER.setLevel(logging.DEBUG)
-    if log_to_file:
-        file_handler = logging.handlers.RotatingFileHandler(
-            'automate.log', maxBytes=10000, backupCount=1)
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(formatter)
-        LOGGER.addHandler(file_handler)
-    else:
-        print_handler = logging.StreamHandler(sys.stdout)
-        print_handler.setLevel(logging.DEBUG)
-        print_handler.setFormatter(formatter)
-        LOGGER.addHandler(print_handler)
-
-    LOGGER.debug("Starting main")
-
-
 def start_processes(testing=False):
     listen_rf_proc = Process(target=listen_rf, args=(ARE_LIGHTS_ON,))
     listen_rf_proc.daemon = True
@@ -114,15 +94,16 @@ def start_processes(testing=False):
     # light_process.daemon = True
     # light_process.start()
 
-    # Stop running at 9PM
+    # Stop running at 6AM next day
     # Script is expected to be started by cron
-    kill_at(datetime.time(hour=21), testing)
+    tomorrow = datetime.now().replace(hour=6) + timedelta(days=1)
+    kill_at(tomorrow, testing)
 
 
 def kill_at(end_time, testing=False):
     LOGGER.debug("Kill timer started")
     while True:
-        if datetime.datetime.now().time() > end_time and not testing:
+        if datetime.now() > end_time and not testing:
             LOGGER.debug("Killing")
             cleanup()
             sys.exit()
@@ -177,21 +158,32 @@ def monitor_light(is_dark):
 
 def monitor_motion(is_dark):
     GPIO.setup(PIR_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+    bedtime = datetime.now().replace(hour=23)
 
     while True:
         GPIO.wait_for_edge(PIR_PIN, GPIO.RISING)
         LOGGER.debug("You moved, dark: " + str(is_dark.value))
         # if is_dark.value:
-        all_lights_on()
+        if datetime.now() > bedtime:
+            # It's late! Just turn on one light
+            LOGGER.debug("Only turning on light 2 because it's late")
+            turn_lights_on(2)
+        else:
+            all_lights_on()
 
 
 def all_lights_on(delay=None):
     """Turn all lights on"""
+    turn_lights_on("all")
+
+
+def turn_lights_on(light, delay=None):
+    """Turn a light on, with light being the key for LIGHT_CODES"""
     LOGGER.info("Turning lights on")
     if ARE_LIGHTS_ON.value:
         LOGGER.warning("Cancelled as lights already on")
         return
-    transmit_rf(LIGHT_CODES["all"]["on"], delay)
+    transmit_rf(LIGHT_CODES[light]["on"], delay)
 
 
 def all_lights_off(delay=None):
@@ -212,6 +204,26 @@ def transmit_rf(code, delay=None):
     RF_TX.tx_code(code, tx_pulselength=RF_PULSE_LENGTH)
     time.sleep(0.10)
     RF_TX.tx_code(code, tx_pulselength=RF_PULSE_LENGTH)
+
+
+def setup_logger(log_to_file=False):
+    formatter = logging.Formatter(
+        '%(asctime)s : %(name)-10s : %(levelname)-7s : %(message)s')
+
+    LOGGER.setLevel(logging.DEBUG)
+    if log_to_file:
+        file_handler = logging.handlers.RotatingFileHandler(
+            'automate.log', maxBytes=10000, backupCount=1)
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(formatter)
+        LOGGER.addHandler(file_handler)
+    else:
+        print_handler = logging.StreamHandler(sys.stdout)
+        print_handler.setLevel(logging.DEBUG)
+        print_handler.setFormatter(formatter)
+        LOGGER.addHandler(print_handler)
+
+    LOGGER.debug("Starting main")
 
 
 def exithandler(signal, frame):
