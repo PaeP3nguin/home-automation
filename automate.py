@@ -170,6 +170,8 @@ def monitor_motion(is_dark):
             turn_lights_on(2)
         else:
             all_lights_on()
+        # Don't re-trigger for 30 seconds
+        time.sleep(30)
 
 
 def all_lights_on(delay=None):
